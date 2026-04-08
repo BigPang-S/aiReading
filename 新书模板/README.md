@@ -22,6 +22,7 @@
 - 新书不机械锁死固定总章数
 - 卷划分、章节组块、阶段推进按当次大纲动态整理
 - 每章先保证任务、场景、关系、情绪、章尾牵引力成立
+- 模板内置章节验收会检查显式逻辑自撞、连续性强信号、情绪承接、决策代价和主支线漂移
 - 正文与框架正式交付统一使用真实 `.docx`
 
 ## 说明
@@ -39,3 +40,5 @@ python3 scripts/run_chapter_acceptance.py --chapter 小说正文/001_章节名.d
 ```bash
 python3 scripts/sync_sop_assets.py
 ```
+
+- 如果你把模板单独复制出去使用，`scripts/run_chapter_acceptance.py` 也可以回退调用模板内置的 `SOP资料/skills/novel-chapter-acceptance/scripts/chapter_guard.py`

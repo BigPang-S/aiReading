@@ -36,12 +36,19 @@ def resolve_under(root: Path, raw: str | None) -> Path | None:
     return (root / path).resolve()
 
 
-def find_repo_root(project_root: Path) -> Path:
+def find_guard_script(project_root: Path) -> tuple[Path, Path]:
     for base in [project_root, *project_root.parents]:
         candidate = base / "skills" / "novel-chapter-acceptance" / "scripts" / "chapter_guard.py"
         if candidate.exists():
-            return base
-    raise FileNotFoundError("未找到 skills/novel-chapter-acceptance/scripts/chapter_guard.py")
+            return candidate, base
+
+    local_candidate = project_root / "SOP资料" / "skills" / "novel-chapter-acceptance" / "scripts" / "chapter_guard.py"
+    if local_candidate.exists():
+        return local_candidate, project_root
+
+    raise FileNotFoundError(
+        "未找到 skills/novel-chapter-acceptance/scripts/chapter_guard.py，也未找到模板内置 SOP资料/skills/novel-chapter-acceptance/scripts/chapter_guard.py"
+    )
 
 
 def pick_first_existing(paths: list[Path]) -> Path | None:
@@ -78,7 +85,7 @@ def pick_outline(project_root: Path) -> Path | None:
 
 
 def build_guard_command(
-    repo_root: Path,
+    guard_script: Path,
     chapter: Path,
     rules: Path | None,
     outline: Path | None,
@@ -86,7 +93,7 @@ def build_guard_command(
 ) -> list[str]:
     command = [
         "python3",
-        str(repo_root / "skills" / "novel-chapter-acceptance" / "scripts" / "chapter_guard.py"),
+        str(guard_script),
         "--chapter",
         str(chapter),
         "--format",
@@ -184,7 +191,7 @@ def append_record(record_path: Path, project_root: Path, report: dict, command: 
 def main() -> int:
     args = parse_args()
     project_root = resolve_project_root(args)
-    repo_root = find_repo_root(project_root)
+    guard_script, guard_cwd = find_guard_script(project_root)
 
     chapter = resolve_under(project_root, args.chapter)
     if chapter is None or not chapter.exists():
@@ -200,8 +207,8 @@ def main() -> int:
     previous_dir = resolve_under(project_root, args.previous_dir) if args.previous_dir else project_root / "小说正文"
     record = resolve_under(project_root, args.record) if args.record else project_root / "章节验收记录.md"
 
-    command = build_guard_command(repo_root, chapter, rules, outline, previous_dir)
-    exit_code, report = run_guard(command, repo_root)
+    command = build_guard_command(guard_script, chapter, rules, outline, previous_dir)
+    exit_code, report = run_guard(command, guard_cwd)
 
     summary = [
         "章节自动验收完成",
