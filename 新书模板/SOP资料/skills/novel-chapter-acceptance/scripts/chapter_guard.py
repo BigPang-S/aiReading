@@ -514,6 +514,33 @@ NON_NAME_PREFIXES = (
     "若是",
     "若非",
 )
+NON_NAME_TOKENS = {
+    "忽然",
+    "忽地",
+    "忽而",
+    "随后",
+    "旋即",
+    "立刻",
+    "顿时",
+    "一时",
+    "这时",
+    "此时",
+    "当下",
+    "低头",
+    "抬头",
+}
+NON_NAME_PARTS = (
+    "这几",
+    "那几",
+    "几道",
+    "几条",
+    "几个",
+    "几名",
+    "几位",
+    "几步",
+    "几间",
+    "几口",
+)
 SILENCE_STATE_RE = re.compile(
     r"([\u4e00-\u9fff]{2,4})(?:没有说话|没说话|未答|没有作答|没作答|并不作答|没有应声|没应声|"
     r"没有开口|没开口|没有接话|没接话|只是沉默|沉默不语|一言不发)"
@@ -607,6 +634,51 @@ RELATION_SETBACK_CUES = (
     "消息传来",
 )
 NAME_TRAILING_PARTICLES = ("也", "都", "又", "便", "就", "还", "才", "却", "只")
+STANCE_TARGET_STOPWORDS = {
+    "这边",
+    "那边",
+    "一边",
+    "这儿",
+    "那儿",
+    "这里",
+    "那里",
+    "原处",
+}
+STANCE_TARGET_SUFFIXES = (
+    "门前",
+    "门口",
+    "门外",
+    "门内",
+    "殿前",
+    "殿外",
+    "殿内",
+    "殿中",
+    "廊下",
+    "廊外",
+    "院里",
+    "院中",
+    "屋里",
+    "屋中",
+    "帐中",
+    "帐里",
+    "街上",
+    "长街",
+    "校场",
+    "城头",
+    "城下",
+    "桥边",
+    "亭中",
+    "堂中",
+    "府中",
+    "角",
+    "边",
+    "下",
+    "上",
+    "里",
+    "外",
+    "中",
+    "处",
+)
 EVENT_BRIDGE_CUES = (
     "片刻后",
     "过了片刻",
@@ -837,12 +909,13 @@ PRIORITY_RESET_CUES = (
     "出了岔子",
 )
 STANCE_SUPPORT_PATTERNS = (
-    re.compile(r"([\u4e00-\u9fff]{2,4})(?:站在|站到|站到了|倒向|投向)([\u4e00-\u9fff]{2,4})(?:这边|一边)?"),
+    re.compile(r"([\u4e00-\u9fff]{2,4})(?:站到|站到了|倒向|投向)([\u4e00-\u9fff]{2,4})(?:这边|一边)?"),
+    re.compile(r"([\u4e00-\u9fff]{2,4})站在([\u4e00-\u9fff]{2,4})(?:这边|一边)"),
     re.compile(r"([\u4e00-\u9fff]{2,4})(?:替|替着)([\u4e00-\u9fff]{2,4})说话"),
     re.compile(r"([\u4e00-\u9fff]{2,4})(?:帮着|护着|护住)([\u4e00-\u9fff]{2,4})"),
 )
 STANCE_OPPOSE_PATTERNS = (
-    re.compile(r"([\u4e00-\u9fff]{2,4})(?:防着|盯着|针对|要动|要拿)([\u4e00-\u9fff]{2,4})"),
+    re.compile(r"([\u4e00-\u9fff]{2,4})(?:防着|针对|要动|要拿)([\u4e00-\u9fff]{2,4})"),
     re.compile(r"([\u4e00-\u9fff]{2,4})与([\u4e00-\u9fff]{2,4})(?:翻了脸|为敌)"),
 )
 STANCE_SWITCH_CUES = (
@@ -1806,7 +1879,11 @@ def is_probable_name(token: str) -> bool:
     token = normalize_name_token(token)
     if len(token) < 2 or len(token) > 4:
         return False
+    if token in NON_NAME_TOKENS:
+        return False
     if any(token.startswith(prefix) for prefix in NON_NAME_PREFIXES):
+        return False
+    if any(part in token for part in NON_NAME_PARTS):
         return False
     return True
 
@@ -1855,11 +1932,8 @@ def find_dialogue_attribution_issues(paragraphs: list[str], run_threshold: int =
 
     for idx, para in enumerate(paragraphs, start=1):
         quote_count = len(QUOTE_CONTENT_RE.findall(para))
-        outside_quotes = QUOTE_CONTENT_RE.sub("", para)
         speech_names = {
-            normalize_name_token(match.group(1))
-            for match in NAME_SPEECH_TAG_RE.finditer(outside_quotes)
-            if is_probable_name(match.group(1))
+            item["name"] for item in extract_named_dialogues_from_paragraph(para, idx)
         }
 
         if quote_count == 1 and len(speech_names) >= 2:
@@ -2819,6 +2893,14 @@ def normalize_stance_target(token: str) -> str:
     return normalize_name_token(token).rstrip("这那")
 
 
+def is_probable_stance_target(token: str) -> bool:
+    if token in STANCE_TARGET_STOPWORDS:
+        return False
+    if any(token.endswith(suffix) for suffix in STANCE_TARGET_SUFFIXES):
+        return False
+    return is_probable_name(token)
+
+
 def extract_stance_events(paragraph: str) -> list[dict[str, str]]:
     events: list[dict[str, str]] = []
 
@@ -2826,7 +2908,7 @@ def extract_stance_events(paragraph: str) -> list[dict[str, str]]:
         for match in pattern.finditer(paragraph):
             actor = normalize_name_token(match.group(1))
             target = normalize_stance_target(match.group(2))
-            if not (is_probable_name(actor) and is_probable_name(target)) or actor == target:
+            if not (is_probable_name(actor) and is_probable_stance_target(target)) or actor == target:
                 continue
             events.append(
                 {
@@ -2841,7 +2923,7 @@ def extract_stance_events(paragraph: str) -> list[dict[str, str]]:
         for match in pattern.finditer(paragraph):
             actor = normalize_name_token(match.group(1))
             target = normalize_stance_target(match.group(2))
-            if not (is_probable_name(actor) and is_probable_name(target)) or actor == target:
+            if not (is_probable_name(actor) and is_probable_stance_target(target)) or actor == target:
                 continue
             events.append(
                 {

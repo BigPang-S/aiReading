@@ -1,34 +1,108 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import argparse
+import hashlib
+import json
 import shutil
 from pathlib import Path
 
 
 IGNORE_NAMES = {".DS_Store", "__pycache__"}
+MANIFEST_NAME = ".sync_manifest.json"
 
 
-def clean_dir(path: Path) -> None:
-    if path.exists():
-        shutil.rmtree(path)
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="同步上级 SOP 资料到当前项目，默认保留本地增量")
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="强制覆盖与上级版本冲突的已有文件",
+    )
+    return parser.parse_args()
+
+
+def ensure_dir(path: Path) -> None:
     path.mkdir(parents=True, exist_ok=True)
 
 
-def copy_tree(src: Path, dst: Path) -> None:
-    shutil.copytree(
-        src,
-        dst,
-        ignore=shutil.ignore_patterns(*IGNORE_NAMES, "*.pyc"),
-        dirs_exist_ok=True,
+def should_ignore(path: Path) -> bool:
+    return path.name in IGNORE_NAMES or path.suffix == ".pyc"
+
+
+def file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as fh:
+        for chunk in iter(lambda: fh.read(65536), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def load_manifest(path: Path) -> dict[str, str]:
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    return {str(key): str(value) for key, value in data.items()}
+
+
+def save_manifest(path: Path, manifest: dict[str, str]) -> None:
+    ensure_dir(path.parent)
+    path.write_text(
+        json.dumps(dict(sorted(manifest.items())), ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
     )
 
 
 def copy_file(src: Path, dst: Path) -> None:
-    dst.parent.mkdir(parents=True, exist_ok=True)
+    ensure_dir(dst.parent)
     shutil.copy2(src, dst)
 
 
+def iter_tree_files(root: Path) -> list[Path]:
+    return sorted(
+        path for path in root.rglob("*") if path.is_file() and not should_ignore(path)
+    )
+
+
+def sync_file(
+    src: Path,
+    dst: Path,
+    key: str,
+    previous_manifest: dict[str, str],
+    next_manifest: dict[str, str],
+    *,
+    force: bool,
+) -> str:
+    src_hash = file_sha256(src)
+    previous_hash = previous_manifest.get(key)
+
+    if not dst.exists():
+        copy_file(src, dst)
+        next_manifest[key] = src_hash
+        return "copied"
+
+    dst_hash = file_sha256(dst)
+    if dst_hash == src_hash:
+        next_manifest[key] = src_hash
+        return "unchanged"
+
+    if force or (previous_hash and dst_hash == previous_hash):
+        copy_file(src, dst)
+        next_manifest[key] = src_hash
+        return "updated"
+
+    if previous_hash:
+        next_manifest[key] = previous_hash
+    return "conflict"
+
+
 def main() -> int:
+    args = parse_args()
     script_path = Path(__file__).resolve()
     template_root = script_path.parent.parent
     repo_root = template_root.parent
@@ -37,20 +111,76 @@ def main() -> int:
     docs_dir = target_root / "说明文档"
     skills_dir = target_root / "skills"
     workflows_dir = target_root / "workflows"
+    manifest_path = target_root / MANIFEST_NAME
 
-    clean_dir(target_root)
-    docs_dir.mkdir(parents=True, exist_ok=True)
+    ensure_dir(docs_dir)
+    ensure_dir(skills_dir)
+    ensure_dir(workflows_dir)
+
+    previous_manifest = load_manifest(manifest_path)
+    next_manifest: dict[str, str] = {}
+    copied: list[str] = []
+    updated: list[str] = []
+    conflicts: list[str] = []
+
+    def apply_status(status: str, key: str) -> None:
+        if status == "copied":
+            copied.append(key)
+        elif status == "updated":
+            updated.append(key)
+        elif status == "conflict":
+            conflicts.append(key)
 
     for file_name in ["总览说明.md", "给下一个工具的接管说明.md"]:
-        copy_file(repo_root / file_name, docs_dir / file_name)
+        src = repo_root / file_name
+        dst = docs_dir / file_name
+        key = f"说明文档/{file_name}"
+        status = sync_file(
+            src,
+            dst,
+            key,
+            previous_manifest,
+            next_manifest,
+            force=args.force,
+        )
+        apply_status(status, key)
 
-    copy_tree(repo_root / "skills", skills_dir)
-    copy_tree(repo_root / "workflows", workflows_dir)
+    for src_root, dst_root, prefix in [
+        (repo_root / "skills", skills_dir, "skills"),
+        (repo_root / "workflows", workflows_dir, "workflows"),
+    ]:
+        for src in iter_tree_files(src_root):
+            relative = src.relative_to(src_root)
+            dst = dst_root / relative
+            key = str(Path(prefix) / relative)
+            status = sync_file(
+                src,
+                dst,
+                key,
+                previous_manifest,
+                next_manifest,
+                force=args.force,
+            )
+            apply_status(status, key)
 
-    print("已同步以下内容到新书模板/SOP资料：")
+    save_manifest(manifest_path, next_manifest)
+
+    print("已同步上级 SOP 资料到当前项目的 `SOP资料/`：")
     print(f"- 说明文档: {docs_dir}")
     print(f"- skills: {skills_dir}")
     print(f"- workflows: {workflows_dir}")
+    print(f"- 新增文件: {len(copied)}")
+    print(f"- 更新文件: {len(updated)}")
+    if conflicts:
+        print(f"- 保留本地版本: {len(conflicts)}")
+        for key in conflicts[:12]:
+            print(f"  - {key}")
+        if len(conflicts) > 12:
+            print(f"  - 其余 {len(conflicts) - 12} 项已省略")
+        if not args.force:
+            print("- 如需强制覆盖冲突文件，可追加 `--force`")
+    else:
+        print("- 保留本地版本: 0")
     return 0
 
 
