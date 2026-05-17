@@ -12,6 +12,10 @@ from datetime import datetime
 from pathlib import Path
 
 DOCX_NS = {"w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main"}
+TIMESTAMP_SECTION_RE = re.compile(r"^## \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} .*$", re.M)
+FILE_LINE_RE = re.compile(r"^- 文件：\s*`?(.+?)`?\s*$", re.M)
+AUTO_ARCHIVE_DIRNAME = "归档"
+ACCEPTANCE_AUTO_ARCHIVE_NAME = "章节验收记录_自动归档.md"
 STYLE_FORMULA_PATTERNS: list[tuple[str, re.Pattern[str], str]] = [
     ("不是……却是……", re.compile(r"不是[^。！？；\n]{1,24}却是"), "strong"),
     ("不是……而是……", re.compile(r"不是[^。！？；\n]{1,24}而是"), "strong"),
@@ -28,9 +32,9 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="运行章节验收并自动写入章节验收记录")
     parser.add_argument("--chapter", required=True, help="当前章节文件，相对项目根目录或绝对路径")
     parser.add_argument("--project-root", help="项目根目录，默认取脚本所在目录的上一层")
-    parser.add_argument("--rules", help="规则文件，默认 项目规则.md")
-    parser.add_argument("--outline", help="总目录文件，默认 小说框架/03_总目录.md")
-    parser.add_argument("--previous-dir", help="正文目录，默认 小说正文")
+    parser.add_argument("--rules", help="规则文件，默认 当前有效规则卡.md")
+    parser.add_argument("--outline", help="总目录文件；默认不读取，任务卡缺失或推进错位时再显式传入")
+    parser.add_argument("--previous-dir", help="正文目录；默认不读取，连续性无法判断时再显式传入")
     parser.add_argument("--record", help="验收记录文件，默认 章节验收记录.md")
     parser.add_argument(
         "--log-mode",
@@ -215,23 +219,69 @@ def to_project_relative(path: str | Path, project_root: Path) -> str:
         return str(target)
 
 
-def append_record(
-    record_path: Path,
-    project_root: Path,
+def split_timestamp_sections(text: str) -> tuple[str, list[str]]:
+    matches = list(TIMESTAMP_SECTION_RE.finditer(text))
+    if not matches:
+        return text, []
+    preamble = text[: matches[0].start()]
+    sections: list[str] = []
+    for index, match in enumerate(matches):
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(text)
+        sections.append(text[match.start() : end])
+    return preamble, sections
+
+
+def extract_record_file_label(block: str) -> str | None:
+    match = FILE_LINE_RE.search(block)
+    if not match:
+        return None
+    return match.group(1).strip()
+
+
+def append_archive_blocks(archive_path: Path, title: str, blocks: list[str]) -> None:
+    normalized_blocks = [block.strip() for block in blocks if block.strip()]
+    if not normalized_blocks:
+        return
+
+    archive_path.parent.mkdir(parents=True, exist_ok=True)
+    if archive_path.exists():
+        existing = archive_path.read_text(encoding="utf-8")
+    else:
+        existing = f"# {title}\n"
+        archive_path.write_text(existing, encoding="utf-8")
+
+    pending: list[str] = []
+    for block in normalized_blocks:
+        if block not in existing:
+            pending.append(block)
+
+    if not pending:
+        return
+
+    with archive_path.open("a", encoding="utf-8") as fh:
+        if existing and not existing.endswith("\n"):
+            fh.write("\n")
+        if existing.strip():
+            fh.write("\n")
+        fh.write("\n\n".join(pending))
+        fh.write("\n")
+
+
+def build_record_entry(
     report: dict,
     command: list[str],
     log_mode: str,
-) -> None:
+    file_label: str,
+) -> str:
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     outline_entries = report.get("outline_entries") or []
     failures = report.get("failures") or []
     warnings = report.get("warnings") or []
     passes = report.get("passes") or []
     style_formula_hits = report.get("style_formula_hits") or []
-    file_label = to_project_relative(report["file"], project_root)
     rules = report.get("rules", {})
 
-    lines = ["", f"## {timestamp} {report.get('title', '未识别标题')}"]
+    lines = [f"## {timestamp} {report.get('title', '未识别标题')}"]
     lines.append(f"- 文件：{file_label}")
     lines.append(f"- 验收结论：{report.get('overall', '未知')}")
     lines.append(f"- 正文字数：{report.get('body_chars', '未知')}")
@@ -277,11 +327,38 @@ def append_record(
         }.get(report.get("overall"), "请人工复核。")
         lines.append(f"- 下一步建议：{next_action}")
 
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def append_record(
+    record_path: Path,
+    project_root: Path,
+    report: dict,
+    command: list[str],
+    log_mode: str,
+) -> None:
+    file_label = to_project_relative(report["file"], project_root)
+    entry = build_record_entry(report, command, log_mode, file_label)
+
     if not record_path.exists():
         record_path.write_text("# 章节验收记录\n", encoding="utf-8")
-    with record_path.open("a", encoding="utf-8") as fh:
-        fh.write("\n".join(lines))
-        fh.write("\n")
+    content = record_path.read_text(encoding="utf-8")
+    preamble, sections = split_timestamp_sections(content)
+    displaced = [section for section in sections if extract_record_file_label(section) == file_label]
+    kept = [section for section in sections if extract_record_file_label(section) != file_label]
+
+    append_archive_blocks(
+        project_root / AUTO_ARCHIVE_DIRNAME / ACCEPTANCE_AUTO_ARCHIVE_NAME,
+        "章节验收记录自动归档",
+        displaced,
+    )
+
+    parts: list[str] = []
+    if preamble.strip():
+        parts.append(preamble.rstrip())
+    parts.extend(section.strip() for section in kept if section.strip())
+    parts.append(entry.strip())
+    record_path.write_text("\n\n".join(parts) + "\n", encoding="utf-8")
 
 
 def main() -> int:
@@ -294,13 +371,17 @@ def main() -> int:
         print(f"找不到章节文件：{args.chapter}", file=sys.stderr)
         return 1
 
-    rules = resolve_under(project_root, args.rules) if args.rules else pick_first_existing([project_root / "项目规则.md"])
+    rules = (
+        resolve_under(project_root, args.rules)
+        if args.rules
+        else pick_first_existing([project_root / "当前有效规则卡.md"])
+    )
     outline = (
         resolve_under(project_root, args.outline)
         if args.outline
-        else pick_outline(project_root)
+        else None
     )
-    previous_dir = resolve_under(project_root, args.previous_dir) if args.previous_dir else project_root / "小说正文"
+    previous_dir = resolve_under(project_root, args.previous_dir) if args.previous_dir else None
     record = resolve_under(project_root, args.record) if args.record else project_root / "章节验收记录.md"
 
     command = build_guard_command(guard_script, chapter, rules, outline, previous_dir)

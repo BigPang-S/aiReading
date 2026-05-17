@@ -5,17 +5,13 @@
 - 下一本小说可以直接开工
 - 长连载时不靠反复喂全量上下文
 
-先读 `下一本小说直用工作流.md`。它是整套模板的总入口。
-如果你手里已经有大纲、脑洞或人物想法，先填 `开书输入.md`，再看 `SOP资料/workflows/开书初始化工作流.md`。
-如果你当前最关心的是 token 成本，直接看 `SOP资料/workflows/低Token连载工作流模板.md`。
-如果你已经安装了 Claude-Mem 和 RTK，再看 `SOP资料/说明文档/Claude-Mem与RTK接入规则.md`。
+先读 `小说SOP最终流程.md`。它是整套模板唯一保留的 SOP 流程入口。
 
 ## 开书顺序
 
 1. 把你的原始大纲、脑洞或想法写进 `开书输入.md`
-2. 看 `SOP资料/workflows/开书初始化工作流.md`
-3. 用 `SOP资料/说明文档/Codex开书初始化提示模板.md` 让 Codex 完成开书初始化
-4. 检查并微调生成好的规划层文件：
+2. 按 `小说SOP最终流程.md` 的“开书初始化”部分执行
+3. 检查并微调生成好的规划层文件：
    - `小说框架/00_作品定位.md`
    - `小说框架/01_世界观与主线.md`
    - `小说框架/02_人物关系表.md`
@@ -24,17 +20,20 @@
    - `小说框架/04_节奏设计.md`
    - `小说框架/05_作品简介.md`
    - `小说框架/07_人物小传.md`
-5. 确认已经生成：
+4. 确认已经生成：
    - 第一卷执行状态卡
    - 第 1 章任务卡
-6. 再确认 `当前有效规则卡.md`
+5. 再确认 `当前有效规则卡.md`
 
-## 连载时默认只读四样
+## 连载时默认维护三卡
 
 1. `当前有效规则卡.md`
 2. 当前卷执行状态卡
 3. 当前章任务卡
-4. 前 1 章正文；承接复杂时最多前 2 章
+
+日常写章另看：
+
+- `SOP资料/skills/技能短卡.md` 中本章需要的 1-2 个摘要
 
 不默认回读：
 
@@ -56,13 +55,21 @@ python3 scripts/prepare_chapter_context.py \
   --output 小说框架/当前章上下文包.md
 ```
 
-写完章节后做验收：
+生成后，真正默认交给模型的是：
+
+1. `当前章上下文包.md`
+2. 当前待写 / 待修正文
+3. 必要时的前 1 章正文；承接复杂时最多前 2 章
+
+`当前章上下文包.md` 已经包含规则卡、状态卡、任务卡，不要再把三张源卡重复附送一遍。
+
+草稿阶段先验收 `.txt` 或当前正文文件：
 
 ```bash
-python3 scripts/run_chapter_acceptance.py --chapter 小说正文/001_章节名.docx
+python3 scripts/run_chapter_acceptance.py --chapter 小说正文/源稿/001_章节名.txt
 ```
 
-如果手里是源稿 `.txt`，可以一键跑完渲染和验收：
+通过后再渲染 `.docx`，并做最终验收：
 
 ```bash
 python3 scripts/run_chapter_pipeline.py --input 小说正文/源稿/001_章节名.txt
@@ -80,21 +87,25 @@ python3 scripts/run_chapter_pipeline.py --input 小说正文/源稿/001_章节�
 ## 目录里最重要的文件
 
 - `开书输入.md`
-- `下一本小说直用工作流.md`
+- `小说SOP最终流程.md`
 - `当前有效规则卡.md`
-- `SOP资料/workflows/开书初始化工作流.md`
+- `SOP资料/skills/技能短卡.md`
 - `小说框架/09_当前卷执行状态卡_模板.md`
 - `小说框架/10_当前章任务卡_模板.md`
-- `SOP资料/workflows/低Token连载工作流模板.md`
-- `SOP资料/说明文档/Codex开书初始化提示模板.md`
-- `SOP资料/说明文档/Claude-Mem与RTK接入规则.md`
 - `scripts/prepare_chapter_context.py`
-- `scripts/audit_assistant_tooling.py`
+- `scripts/audit_context_budget.py`
+- `scripts/lint_sop_references.py`
+- `scripts/check_task_card.py`
+- `scripts/compress_state_card.py`
 
 ## 同步 SOP 资料
 
-如果根目录 SOP 更新了，重新同步到模板：
+`SOP资料/` 已经内置在模板里，通常不用同步。
+
+如果你在复制后的项目上级目录另维护了一套 SOP 源，并且它包含 `小说SOP最终流程.md`、`skills/`、`workflows/`，可以同步到模板：
 
 ```bash
-python3 scripts/sync_sop_assets.py
+python3 scripts/sync_sop_assets.py --source-root <SOP源目录>
 ```
+
+不传 `--source-root` 时，脚本会先检查上级目录；如果当前是 aiReading 这种“根目录只保留入口和模板”的结构，会安全跳过。

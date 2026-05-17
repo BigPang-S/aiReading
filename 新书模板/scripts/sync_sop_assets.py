@@ -15,6 +15,10 @@ MANIFEST_NAME = ".sync_manifest.json"
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="同步上级 SOP 资料到当前项目，默认保留本地增量")
     parser.add_argument(
+        "--source-root",
+        help="SOP 源目录；默认取当前模板的上级目录，若上级目录没有 SOP 源则安全跳过",
+    )
+    parser.add_argument(
         "--force",
         action="store_true",
         help="强制覆盖与上级版本冲突的已有文件",
@@ -69,6 +73,16 @@ def iter_tree_files(root: Path) -> list[Path]:
     )
 
 
+def has_sop_source(root: Path) -> bool:
+    return all(
+        [
+            (root / "小说SOP最终流程.md").exists(),
+            (root / "skills").is_dir(),
+            (root / "workflows").is_dir(),
+        ]
+    )
+
+
 def sync_file(
     src: Path,
     dst: Path,
@@ -105,15 +119,28 @@ def main() -> int:
     args = parse_args()
     script_path = Path(__file__).resolve()
     template_root = script_path.parent.parent
-    repo_root = template_root.parent
+    default_source_root = template_root.parent
+    source_root = (
+        Path(args.source_root).expanduser().resolve()
+        if args.source_root
+        else default_source_root
+    )
+
+    if not has_sop_source(source_root):
+        if args.source_root:
+            print(f"指定的 SOP 源目录不完整：{source_root}")
+            print("需要同时包含：小说SOP最终流程.md、skills/、workflows/")
+            return 2
+        print("未找到上级 SOP 源目录，已跳过同步。")
+        print("当前 aiReading 根目录默认只保留入口和 `新书模板/`；模板内置的 `SOP资料/` 已可直接使用。")
+        print("如果你另有 SOP 源目录，可执行：python3 scripts/sync_sop_assets.py --source-root <目录>")
+        return 0
 
     target_root = template_root / "SOP资料"
-    docs_dir = target_root / "说明文档"
     skills_dir = target_root / "skills"
     workflows_dir = target_root / "workflows"
     manifest_path = target_root / MANIFEST_NAME
 
-    ensure_dir(docs_dir)
     ensure_dir(skills_dir)
     ensure_dir(workflows_dir)
 
@@ -131,23 +158,19 @@ def main() -> int:
         elif status == "conflict":
             conflicts.append(key)
 
-    for file_name in ["总览说明.md", "给下一个工具的接管说明.md"]:
-        src = repo_root / file_name
-        dst = docs_dir / file_name
-        key = f"说明文档/{file_name}"
-        status = sync_file(
-            src,
-            dst,
-            key,
-            previous_manifest,
-            next_manifest,
-            force=args.force,
-        )
-        apply_status(status, key)
+    status = sync_file(
+        source_root / "小说SOP最终流程.md",
+        template_root / "小说SOP最终流程.md",
+        "小说SOP最终流程.md",
+        previous_manifest,
+        next_manifest,
+        force=args.force,
+    )
+    apply_status(status, "小说SOP最终流程.md")
 
     for src_root, dst_root, prefix in [
-        (repo_root / "skills", skills_dir, "skills"),
-        (repo_root / "workflows", workflows_dir, "workflows"),
+        (source_root / "skills", skills_dir, "skills"),
+        (source_root / "workflows", workflows_dir, "workflows"),
     ]:
         for src in iter_tree_files(src_root):
             relative = src.relative_to(src_root)
@@ -166,7 +189,7 @@ def main() -> int:
     save_manifest(manifest_path, next_manifest)
 
     print("已同步上级 SOP 资料到当前项目的 `SOP资料/`：")
-    print(f"- 说明文档: {docs_dir}")
+    print(f"- 最终流程: {template_root / '小说SOP最终流程.md'}")
     print(f"- skills: {skills_dir}")
     print(f"- workflows: {workflows_dir}")
     print(f"- 新增文件: {len(copied)}")
